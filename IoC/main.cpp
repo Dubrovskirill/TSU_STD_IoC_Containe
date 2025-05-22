@@ -3,6 +3,8 @@
 #include <memory>
 #include <map>
 #include <string>
+
+
 using namespace std;
 
 // IoC-контейнер
@@ -41,10 +43,24 @@ public:
         return factory->GetObject();
     }
 
-    // Исправленный метод RegisterFactory
+    // Регистрация простых фабрик (без зависимостей)
     template<typename TInterface>
-    void RegisterFactory(std::function<std::shared_ptr<TInterface>()> factoryFunctor) {
+    void RegisterSimpleFactory(std::function<std::shared_ptr<TInterface>()> factoryFunctor) {
         m_factories[GetTypeID<TInterface>()] = std::make_shared<CFactory<TInterface>>(factoryFunctor);
+    }
+
+    // Регистрация функтора с зависимостями
+    template<typename TInterface, typename... TS>
+    void RegisterFunctor(std::function<std::shared_ptr<TInterface>(std::shared_ptr<TS>...)> functor) {
+        m_factories[GetTypeID<TInterface>()] = std::make_shared<CFactory<TInterface>>(
+            [this, functor] { return functor(GetObject<TS>()...); });
+    }
+
+    // Регистрация конкретного экземпляра (singleton)
+    template<typename TInterface>
+    void RegisterInstance(std::shared_ptr<TInterface> instance) {
+        m_factories[GetTypeID<TInterface>()] = std::make_shared<CFactory<TInterface>>(
+            [instance] { return instance; });
     }
 };
 
@@ -65,6 +81,8 @@ class IntelProcessor : public IProcessor {
 public:
     IntelProcessor(double speed, ProcessorType type, string version)
         : version(version), type(type), speed(speed) {}
+    IntelProcessor(std::shared_ptr<double> speedPtr, std::shared_ptr<ProcessorType> typePtr, std::shared_ptr<std::string> versionPtr)
+        : version(*versionPtr), type(*typePtr), speed(*speedPtr) {}
     string GetProcessorInfo() override {
         return "Processor: Intel " + version + ", Type: " + (type == x86 ? "x86" : "x64") + ", Speed: " + to_string(speed) + " GHz";
     }
@@ -77,6 +95,8 @@ class AMDProcessor : public IProcessor {
 public:
     AMDProcessor(double speed, ProcessorType type, string version)
         : version(version), type(type), speed(speed) {}
+    AMDProcessor(std::shared_ptr<double> speedPtr, std::shared_ptr<ProcessorType> typePtr, std::shared_ptr<std::string> versionPtr)
+        : version(*versionPtr), type(*typePtr), speed(*speedPtr) {}
     string GetProcessorInfo() override {
         return "Processor: AMD " + version + ", Type: " + (type == x86 ? "x86" : "x64") + ", Speed: " + to_string(speed) + " GHz";
     }
@@ -97,23 +117,37 @@ public:
 int main() {
     IOCContainer container;
 
-    // Регистрация IntelProcessor
-    container.RegisterFactory<IProcessor>([] {
-        return std::make_shared<IntelProcessor>(2.5, x64, "i7");
+    // Way 1: Simple registration via RegisterSimpleFactory
+    cout << "===== Way 1: Simple registration =====" << endl;
+    container.RegisterSimpleFactory<IProcessor>([] {
+        return make_shared<IntelProcessor>(2.5, x64, "i7");
     });
+    auto computer1 = make_shared<Computer>(container.GetObject<IProcessor>());
+    computer1->Configure();
 
-    // Создание и настройка компьютера с IntelProcessor
-    auto computer = make_shared<Computer>(container.GetObject<IProcessor>());
-    computer->Configure();
+    // Way 2: Instance registration via RegisterInstance
+    cout << "===== Way 2: Instance registration =====" << endl;
+    auto sharedProcessor = make_shared<AMDProcessor>(3.0, x86, "Ryzen");
+    container.RegisterInstance<IProcessor>(sharedProcessor);
+    auto computer2 = make_shared<Computer>(container.GetObject<IProcessor>());
+    computer2->Configure();
+    auto computer3 = make_shared<Computer>(container.GetObject<IProcessor>());
+    computer3->Configure();
 
-    // Регистрация AMDProcessor
-    container.RegisterFactory<IProcessor>([] {
-        return std::make_shared<AMDProcessor>(3.0, x86, "Ryzen");
-    });
-
-    // Создание и настройка компьютера с AMDProcessor
-    computer = make_shared<Computer>(container.GetObject<IProcessor>());
-    computer->Configure();
+    // Way 3: Registration with dependencies via RegisterFunctor
+    cout << "===== Way 3: Registration with dependencies =====" << endl;
+    container.RegisterInstance<double>(make_shared<double>(4.0));
+    container.RegisterInstance<ProcessorType>(make_shared<ProcessorType>(x64));
+    container.RegisterInstance<string>(make_shared<string>("i9"));
+    container.RegisterFunctor<IProcessor, double, ProcessorType, string>(
+        std::function<std::shared_ptr<IProcessor>(std::shared_ptr<double>, std::shared_ptr<ProcessorType>, std::shared_ptr<std::string>)>(
+            [](std::shared_ptr<double> speed, std::shared_ptr<ProcessorType> type, std::shared_ptr<std::string> version) -> std::shared_ptr<IProcessor> {
+                return std::make_shared<IntelProcessor>(*speed, *type, *version);
+            }
+            )
+        );
+    auto computer4 = make_shared<Computer>(container.GetObject<IProcessor>());
+    computer4->Configure();
 
     return 0;
 }
